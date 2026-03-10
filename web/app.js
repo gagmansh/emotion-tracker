@@ -163,28 +163,32 @@ function wireEvents() {
     elements.googleLoginButton.disabled = true;
 
     try {
-      if (shouldUseRedirectAuth()) {
-        if (state.user?.isAnonymous) {
-          await linkWithRedirect(state.user, googleProvider);
-        } else {
-          await signInWithRedirect(state.auth, googleProvider);
-        }
-        return;
-      }
-
       if (state.user?.isAnonymous) {
         try {
           await linkWithPopup(state.user, googleProvider);
           showToast("Google 계정으로 연결했습니다");
           return;
         } catch (error) {
+          if (shouldFallbackToRedirect(error)) {
+            await linkWithRedirect(state.user, googleProvider);
+            return;
+          }
+
           if (error?.code !== "auth/credential-already-in-use") {
             throw error;
           }
         }
       }
 
-      await signInWithPopup(state.auth, googleProvider);
+      try {
+        await signInWithPopup(state.auth, googleProvider);
+      } catch (error) {
+        if (shouldFallbackToRedirect(error)) {
+          await signInWithRedirect(state.auth, googleProvider);
+          return;
+        }
+        throw error;
+      }
       showToast("Google 로그인 완료");
     } catch (error) {
       showToast(readableError(error), true);
@@ -789,13 +793,20 @@ function getPeriodStart(period) {
   return null;
 }
 
-function shouldUseRedirectAuth() {
-  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-}
-
 function isEmbeddedBrowser() {
   const ua = navigator.userAgent || "";
   return /KAKAOTALK|FBAN|FBAV|Instagram|NAVER|Line|wv|TikTok|Twitter/i.test(ua);
+}
+
+function shouldFallbackToRedirect(error) {
+  const code = error?.code || "";
+  return [
+    "auth/popup-blocked",
+    "auth/popup-closed-by-user",
+    "auth/cancelled-popup-request",
+    "auth/web-storage-unsupported",
+    "auth/operation-not-supported-in-this-environment",
+  ].includes(code);
 }
 
 function setConnectionState(message, level) {
