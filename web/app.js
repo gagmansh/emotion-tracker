@@ -17,11 +17,11 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js";
 
 const EMOTION_OPTIONS = [
-  { key: "행복", score: 9.0 },
-  { key: "평온", score: 0.0 },
-  { key: "슬픔", score: -7.5 },
-  { key: "불안", score: -6.5 },
-  { key: "분노", score: -9.0 },
+  { key: "행복", score: 9.0, icon: "sunny" },
+  { key: "평온", score: 0.0, icon: "spa" },
+  { key: "슬픔", score: -7.5, icon: "cloud" },
+  { key: "불안", score: -6.5, icon: "routine" },
+  { key: "분노", score: -9.0, icon: "bolt" },
 ];
 
 const PERIOD_LABELS = {
@@ -114,18 +114,18 @@ function wireEvents() {
     state.nickname = elements.nicknameInput.value.trim();
     localStorage.setItem("emotion-tracker-nickname", state.nickname);
     renderIdentity();
-    showToast("닉네임을 저장했습니다.");
+    showToast("닉네임 저장");
   });
 
   elements.refreshButton.addEventListener("click", () => {
     if (!state.isConfigured || !state.user) {
-      showToast("Firebase 연결이 아직 준비되지 않았습니다.", true);
+      showToast("연결이 아직 준비되지 않았습니다", true);
       return;
     }
 
     subscribeSummary();
     subscribeRecords();
-    showToast("실시간 구독을 다시 연결했습니다.");
+    showToast("동기화 새로고침");
   });
 
   elements.intensityRange.addEventListener("input", (event) => {
@@ -136,7 +136,7 @@ function wireEvents() {
 
   elements.saveRecordButton.addEventListener("click", async () => {
     if (!state.db || !state.user) {
-      showToast("먼저 Firebase 연결을 완료해야 합니다.", true);
+      showToast("먼저 Firebase 연결을 확인해주세요", true);
       return;
     }
 
@@ -148,7 +148,7 @@ function wireEvents() {
       state.currentHq = record.hqCurrent;
       elements.noteInput.value = "";
       refreshPreview();
-      showToast("감정을 저장했습니다.");
+      showToast("감정 저장 완료");
     } catch (error) {
       showToast(readableError(error), true);
     } finally {
@@ -177,32 +177,32 @@ async function bootstrapFirebase() {
     state.auth = getAuth(state.app);
     state.isConfigured = true;
     elements.setupBanner.hidden = true;
-    setConnectionState("Firebase 연결 준비됨", "warn");
+    setConnectionState("연결 준비됨", "warn");
 
     onAuthStateChanged(state.auth, async (user) => {
       if (!user) {
         try {
           await signInAnonymously(state.auth);
         } catch (error) {
-          setConnectionState("익명 로그인 실패", "error");
-          elements.authStatusLabel.textContent = "실패";
+          setConnectionState("로그인 실패", "error");
+          elements.authStatusLabel.textContent = "인증 실패";
           showToast(readableError(error), true);
         }
         return;
       }
 
       state.user = user;
-      elements.authStatusLabel.textContent = user.isAnonymous ? "익명 로그인" : "로그인됨";
+      elements.authStatusLabel.textContent = user.isAnonymous ? "익명 사용자" : "로그인됨";
       renderIdentity();
 
       await ensureUserSummaryDoc();
       subscribeSummary();
       subscribeRecords();
-      setConnectionState("실시간 동기화 연결됨", "ok");
+      setConnectionState("실시간 연결 중", "ok");
       elements.saveRecordButton.disabled = false;
     });
   } catch (error) {
-    setConnectionState("Firebase 초기화 실패", "error");
+    setConnectionState("초기화 실패", "error");
     showToast(readableError(error), true);
   }
 }
@@ -291,7 +291,7 @@ function subscribeSummary() {
       refreshPreview();
     },
     (error) => {
-      setConnectionState("요약 데이터 오류", "error");
+      setConnectionState("요약 오류", "error");
       showToast(readableError(error), true);
     }
   );
@@ -320,7 +320,7 @@ function subscribeRecords() {
       renderRecords();
     },
     (error) => {
-      setConnectionState("기록 동기화 오류", "error");
+      setConnectionState("기록 오류", "error");
       showToast(readableError(error), true);
     }
   );
@@ -330,9 +330,9 @@ function renderEmotionPicker() {
   elements.emotionPicker.innerHTML = EMOTION_OPTIONS.map((emotion) => {
     const activeClass = emotion.key === state.selectedEmotion ? "active" : "";
     return `
-      <button class="emotion-button ${activeClass}" data-emotion="${emotion.key}">
+      <button class="emotion-button ${activeClass}" data-emotion="${emotion.key}" type="button">
+        <span class="material-symbols-outlined">${emotion.icon}</span>
         <strong>${emotion.key}</strong>
-        <small>${formatSigned(emotion.score)}</small>
       </button>
     `;
   }).join("");
@@ -350,7 +350,7 @@ function renderPeriodFilter() {
   elements.periodFilter.innerHTML = Object.entries(PERIOD_LABELS)
     .map(([period, label]) => {
       const activeClass = period === state.selectedPeriod ? "active" : "";
-      return `<button class="period-button ${activeClass}" data-period="${period}">${label}</button>`;
+      return `<button class="period-button ${activeClass}" data-period="${period}" type="button">${label}</button>`;
     })
     .join("");
 
@@ -382,26 +382,26 @@ function renderAnalytics() {
 
 function renderRecords() {
   if (!state.records.length) {
-    elements.recordsList.innerHTML = `<div class="empty-state">아직 이 기간의 기록이 없습니다.</div>`;
+    elements.recordsList.innerHTML = `<div class="empty-state">아직 남겨둔 기록이 없습니다.</div>`;
     return;
   }
 
-  const latest = [...state.records].reverse().slice(0, 12);
+  const latest = [...state.records].reverse().slice(0, 10);
   elements.recordsList.innerHTML = latest
     .map((record) => {
+      const meta = getEmotionMeta(record.emotion);
       const note = record.note ? `<p class="record-note">${escapeHtml(record.note)}</p>` : "";
       return `
         <article class="record-item">
-          <div class="record-topline">
-            <strong class="record-emotion">${record.emotion}</strong>
-            <span class="record-timestamp">${formatDateTime(record.recordedAt)}</span>
+          <div class="record-icon">
+            <span class="material-symbols-outlined">${meta.icon}</span>
           </div>
-          <div class="record-meta">
-            <span>강도 ${record.intensity}</span>
-            <span>HQ ${formatFixed(record.hqPrevious)} -> ${formatFixed(record.hqCurrent)}</span>
-            <span>점수 ${formatSigned(record.emotionScore)}</span>
+          <div class="record-copy">
+            <strong class="record-title">${record.emotion}의 순간</strong>
+            <div class="record-date">${formatDateTime(record.recordedAt)}</div>
+            <div class="record-meta">강도 ${record.intensity} · HQ ${formatFixed(record.hqPrevious)} -> ${formatFixed(record.hqCurrent)}</div>
+            ${note}
           </div>
-          ${note}
         </article>
       `;
     })
@@ -410,13 +410,13 @@ function renderRecords() {
 
 function renderTimelineChart(records) {
   if (!records.length) {
-    elements.timelineChart.innerHTML = `<div class="empty-state">타임라인을 그릴 기록이 없습니다.</div>`;
+    elements.timelineChart.innerHTML = `<div class="empty-state">흐름을 그릴 기록이 아직 없습니다.</div>`;
     return;
   }
 
   const width = 720;
-  const height = 240;
-  const padding = 24;
+  const height = 210;
+  const padding = 20;
   const points = records.map((record, index) => {
     const x = padding + (index / Math.max(records.length - 1, 1)) * (width - padding * 2);
     const y = height - padding - (Number(record.hqCurrent) / 100) * (height - padding * 2);
@@ -425,22 +425,22 @@ function renderTimelineChart(records) {
 
   const path = points.map((point, index) => `${index === 0 ? "M" : "L"}${point.x},${point.y}`).join(" ");
   const circles = points
-    .map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4.5" fill="#ff6b35"></circle>`)
+    .map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#11d4c4"></circle>`)
     .join("");
-  const yGuides = [0, 25, 50, 75, 100]
+  const guides = [0, 25, 50, 75, 100]
     .map((value) => {
       const y = height - padding - (value / 100) * (height - padding * 2);
       return `
-        <line x1="${padding}" x2="${width - padding}" y1="${y}" y2="${y}" stroke="rgba(24,22,29,0.08)"></line>
-        <text x="${padding}" y="${y - 6}" fill="#6c6a74" font-size="11">${value}</text>
+        <line x1="${padding}" x2="${width - padding}" y1="${y}" y2="${y}" stroke="rgba(255,255,255,0.1)"></line>
+        <text x="${padding}" y="${y - 6}" font-size="11">${value}</text>
       `;
     })
     .join("");
 
   elements.timelineChart.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="HQ 타임라인">
-      ${yGuides}
-      <path d="${path}" fill="none" stroke="#18161d" stroke-width="3" stroke-linecap="round"></path>
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="HQ 흐름 차트">
+      ${guides}
+      <path d="${path}" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round"></path>
       ${circles}
     </svg>
   `;
@@ -448,7 +448,7 @@ function renderTimelineChart(records) {
 
 function renderBarsChart(container, rows, labelKey) {
   if (!rows.length) {
-    container.innerHTML = `<div class="empty-state">표시할 평균 데이터가 없습니다.</div>`;
+    container.innerHTML = `<div class="empty-state">아직 보여줄 데이터가 없습니다.</div>`;
     return;
   }
 
@@ -473,11 +473,11 @@ function renderBarsChart(container, rows, labelKey) {
 }
 
 function renderIdentity() {
-  const nickname = state.nickname || "익명 방문자";
+  const nickname = state.nickname || "고요한 숲";
   elements.nicknameInput.value = state.nickname;
   elements.nicknameBadge.textContent = nickname;
-  elements.projectIdLabel.textContent = state.projectId;
-  elements.userKeyLabel.textContent = state.user ? shortenUid(state.user.uid) : "-";
+  elements.projectIdLabel.textContent = state.projectId === "-" ? "프로젝트 -" : `프로젝트 ${state.projectId}`;
+  elements.userKeyLabel.textContent = state.user ? `UID ${shortenUid(state.user.uid)}` : "UID -";
   elements.heroCurrentHq.textContent = formatFixed(state.currentHq);
   elements.lifetimeRecordCount.textContent = `${state.lifetimeRecordCount}`;
 }
@@ -631,8 +631,11 @@ function getUserDocRef() {
 }
 
 function getEmotionScore(emotion) {
-  const option = EMOTION_OPTIONS.find((item) => item.key === emotion);
-  return option ? option.score : 0;
+  return getEmotionMeta(emotion).score;
+}
+
+function getEmotionMeta(emotion) {
+  return EMOTION_OPTIONS.find((item) => item.key === emotion) || EMOTION_OPTIONS[0];
 }
 
 function getPeriodStart(period) {
@@ -681,12 +684,11 @@ function toDate(value) {
 }
 
 function shortenUid(uid) {
-  return uid.length <= 10 ? uid : `${uid.slice(0, 6)}...${uid.slice(-4)}`;
+  return uid.length <= 10 ? uid : `${uid.slice(0, 4)}-${uid.slice(-3)}`;
 }
 
 function formatDateTime(value) {
   return new Intl.DateTimeFormat("ko-KR", {
-    year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -732,10 +734,10 @@ function escapeHtml(text) {
 let toastTimer = null;
 function showToast(message, isError = false) {
   elements.toast.textContent = message;
-  elements.toast.style.background = isError ? "#7f1d1d" : "#18161d";
+  elements.toast.style.background = isError ? "#7f1d1d" : "#1a1a1a";
   elements.toast.classList.add("visible");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
     elements.toast.classList.remove("visible");
-  }, 2600);
+  }, 2200);
 }

@@ -11,220 +11,173 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=Sora:wght@500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=SUIT:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="orb orb-a"></div>
-    <div class="orb orb-b"></div>
     <div class="page-shell">
-      <section class="setup-banner" id="setup-banner" hidden>
-        <div>
-          <p class="eyebrow">Setup Required</p>
-          <h2>Firebase 웹 앱 설정값이 아직 비어 있습니다.</h2>
-          <p>
-            <code>web/config.js</code>에 Firebase Web App 설정을 넣으면 이 페이지가 바로 Firestore에
-            연결됩니다.
-          </p>
-        </div>
-        <code class="setup-snippet">window.EMOTION_TRACKER_CONFIG.firebase = { ... }</code>
-      </section>
-
-      <header class="hero">
-        <div class="hero-copy panel">
-          <p class="eyebrow">Emotion Tracker</p>
-          <h1>감정을 기록하고<br />HQ 흐름을 읽는 개인 대시보드</h1>
-          <p class="hero-text">
-            백엔드 없이 Firebase Auth와 Firestore에 직접 연결됩니다. 사용자마다 익명 계정으로 데이터가
-            분리되고, 이 정적 사이트 그대로 Cloudflare Pages에 올릴 수 있습니다.
-          </p>
-          <div class="hero-pills">
-            <span>Cloudflare Pages</span>
-            <span>Firebase Auth</span>
-            <span>Firestore</span>
-          </div>
-        </div>
-
-        <aside class="status-panel panel">
-          <div class="status-head">
+      <header class="topbar">
+        <div class="topbar-copy">
+          <p class="topbar-kicker">Emotion Tracker</p>
+          <h1>오늘의 마음 조각</h1>
+          <div class="connection-pill">
             <span class="status-dot" id="status-dot"></span>
-            <strong id="connection-label">초기화 중</strong>
+            <span id="connection-label">동기화 준비 중</span>
+          </div>
+        </div>
+        <button class="icon-button" id="refresh-button" type="button" aria-label="새로고침">
+          <span class="material-symbols-outlined">refresh</span>
+        </button>
+      </header>
+
+      <main class="app-stack">
+        <section class="setup-banner" id="setup-banner" hidden>
+          <div>
+            <p class="section-kicker">Setup</p>
+            <h2>Firebase 설정이 아직 비어 있습니다.</h2>
+            <p><code>web/config.js</code>에 웹앱 설정값을 넣으면 바로 연결됩니다.</p>
+          </div>
+        </section>
+
+        <section class="identity-card">
+          <div class="identity-copy">
+            <p class="section-kicker">Identity</p>
+            <div class="identity-name-row">
+              <strong id="nickname-badge">익명 방문자</strong>
+              <span>님</span>
+            </div>
+            <div class="identity-meta">
+              <span id="auth-status-label">인증 대기</span>
+              <span id="project-id-label">프로젝트 -</span>
+              <span id="user-key-label">UID -</span>
+            </div>
           </div>
 
-          <div class="status-grid">
+          <div class="identity-stats">
             <article>
-              <span>인증</span>
-              <strong id="auth-status-label">대기 중</strong>
-            </article>
-            <article>
-              <span>프로젝트</span>
-              <strong id="project-id-label">-</strong>
-            </article>
-            <article>
-              <span>사용자 키</span>
-              <strong id="user-key-label">-</strong>
-            </article>
-            <article>
-              <span>저장소</span>
-              <strong>Firestore</strong>
-            </article>
-          </div>
-
-          <div class="mini-stat-grid">
-            <article class="mini-stat">
-              <span>누적 기록</span>
+              <span>기록 수</span>
               <strong id="lifetime-record-count">0</strong>
             </article>
-            <article class="mini-stat">
+            <article>
               <span>현재 HQ</span>
               <strong id="hero-current-hq">50.00</strong>
             </article>
           </div>
-        </aside>
-      </header>
-
-      <main class="dashboard">
-        <section class="panel session-panel">
-          <div class="panel-header">
-            <h2>세션</h2>
-            <p>익명 로그인으로 각 사용자의 기록은 자동으로 분리됩니다.</p>
-          </div>
-
-          <div class="session-grid">
-            <label class="field">
-              <span>화면에 표시할 닉네임</span>
-              <input id="nickname-input" type="text" maxlength="24" placeholder="예: 민지" />
-            </label>
-
-            <div class="session-note">
-              <strong id="nickname-badge">익명 방문자</strong>
-              <p>닉네임은 브라우저에만 저장됩니다. Firestore에는 사용자 UID 기준으로 저장됩니다.</p>
-            </div>
-          </div>
-
-          <div class="button-row">
-            <button id="save-nickname-button" class="secondary-button">닉네임 저장</button>
-            <button id="refresh-button" class="ghost-button">동기화 새로고침</button>
-          </div>
         </section>
 
-        <section class="panel composer-panel">
-          <div class="panel-header">
-            <h2>감정 기록</h2>
-            <p>감정 점수와 강도를 기준으로 HQ를 계산한 뒤 Firestore에 저장합니다.</p>
+        <section class="nickname-row">
+          <input id="nickname-input" type="text" maxlength="24" placeholder="닉네임을 바꿔보세요" />
+          <button id="save-nickname-button" type="button">저장</button>
+        </section>
+
+        <section class="composer-card">
+          <div class="section-head">
+            <h2>지금 어떤 기분인가요?</h2>
           </div>
 
           <div class="emotion-picker" id="emotion-picker"></div>
 
-          <div class="composer-grid">
-            <label class="field">
-              <span>강도</span>
-              <input id="intensity-range" type="range" min="1" max="10" value="5" />
+          <div class="intensity-block">
+            <div class="intensity-head">
+              <span>감정의 강도</span>
               <strong id="intensity-label">5</strong>
-            </label>
-
-            <label class="field">
-              <span>메모</span>
-              <textarea
-                id="note-input"
-                rows="5"
-                maxlength="300"
-                placeholder="오늘 감정의 배경이나 상황을 짧게 남겨두세요."
-              ></textarea>
-            </label>
+            </div>
+            <input id="intensity-range" type="range" min="1" max="10" value="5" />
           </div>
 
-          <div class="preview-grid">
-            <article class="metric-card accent-card">
-              <span>현재 HQ</span>
-              <strong id="preview-current-hq">50.00</strong>
-            </article>
-            <article class="metric-card">
-              <span>감정 점수</span>
-              <strong id="preview-emotion-score">0.00</strong>
-            </article>
-            <article class="metric-card">
-              <span>예상 변화량</span>
-              <strong id="preview-delta-hq">0.00</strong>
-            </article>
-            <article class="metric-card">
-              <span>저장 후 HQ</span>
-              <strong id="preview-next-hq">50.00</strong>
-            </article>
-          </div>
+          <textarea
+            id="note-input"
+            rows="3"
+            maxlength="300"
+            placeholder="마음의 조각을 짧게 남겨보세요"
+          ></textarea>
 
-          <div class="button-row">
-            <button id="save-record-button" class="primary-button">감정 저장</button>
-          </div>
+          <button class="primary-button" id="save-record-button" type="button">감정 저장</button>
         </section>
 
-        <section class="panel analytics-panel">
-          <div class="panel-header">
-            <h2>분석 대시보드</h2>
-            <p>현재 선택한 기간 기준으로 최빈 감정과 시간대별 흐름을 보여줍니다.</p>
+        <section class="preview-strip">
+          <article class="mini-card">
+            <span>지금 HQ</span>
+            <strong id="preview-current-hq">50.00</strong>
+          </article>
+          <article class="mini-card">
+            <span>감정 점수</span>
+            <strong id="preview-emotion-score">0.00</strong>
+          </article>
+          <article class="mini-card">
+            <span>예상 변동</span>
+            <strong id="preview-delta-hq">0.00</strong>
+          </article>
+          <article class="mini-card">
+            <span>기록 후 HQ</span>
+            <strong id="preview-next-hq">50.00</strong>
+          </article>
+        </section>
+
+        <section class="analytics-card">
+          <div class="analytics-head">
+            <div>
+              <p class="section-kicker">Flow</p>
+              <h2>이번 흐름</h2>
+            </div>
+            <div class="period-filter" id="period-filter"></div>
           </div>
 
-          <div class="period-filter" id="period-filter"></div>
-
           <div class="summary-grid">
-            <article class="metric-card">
-              <span>기간 내 기록 수</span>
+            <article>
+              <span>기록 수</span>
               <strong id="summary-record-count">0</strong>
             </article>
-            <article class="metric-card">
-              <span>최빈 감정</span>
+            <article>
+              <span>많이 느낀 감정</span>
               <strong id="summary-most-emotion">-</strong>
             </article>
-            <article class="metric-card">
+            <article>
               <span>평균 HQ</span>
               <strong id="summary-average-hq">-</strong>
             </article>
-            <article class="metric-card">
+            <article>
               <span>현재 HQ</span>
               <strong id="summary-current-hq">50.00</strong>
             </article>
           </div>
 
-          <div class="chart-grid">
-            <article class="chart-card">
-              <div class="chart-header">
-                <h3>HQ 타임라인</h3>
-                <p>선택한 기간 동안 HQ가 어떤 방향으로 움직였는지 보여줍니다.</p>
-              </div>
-              <div class="chart-surface" id="timeline-chart"></div>
-            </article>
+          <div class="chart-card">
+            <div class="chart-head">
+              <h3>감정의 흐름</h3>
+              <p>선택한 기간 동안의 HQ 라인입니다.</p>
+            </div>
+            <div class="timeline-chart" id="timeline-chart"></div>
+          </div>
 
-            <article class="chart-card">
-              <div class="chart-header">
-                <h3>시간대별 평균 HQ</h3>
-                <p>어느 시간대에 상태가 좋은지 빠르게 파악할 수 있습니다.</p>
-              </div>
+          <div class="insight-grid">
+            <article class="insight-card">
+              <p>시간대별 평균 HQ</p>
               <div class="bars-surface" id="hourly-chart"></div>
             </article>
-
-            <article class="chart-card">
-              <div class="chart-header">
-                <h3>요일별 평균 HQ</h3>
-                <p>요일 패턴이 있다면 여기서 바로 드러납니다.</p>
-              </div>
+            <article class="insight-card">
+              <p>요일별 평균 HQ</p>
               <div class="bars-surface" id="weekday-chart"></div>
             </article>
           </div>
         </section>
 
-        <section class="panel records-panel">
-          <div class="panel-header">
-            <h2>최근 기록</h2>
-            <p>선택한 기간 안의 감정 로그를 최신순으로 보여줍니다.</p>
+        <section class="records-card">
+          <div class="section-head">
+            <h2>기록의 자취</h2>
           </div>
           <div class="records-list" id="records-list"></div>
         </section>
       </main>
-    </div>
 
-    <div class="toast" id="toast"></div>
+      <div class="toast" id="toast"></div>
+    </div>
 
     <script src="./config.js"></script>
     <script type="module" src="./app.js"></script>
