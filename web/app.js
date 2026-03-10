@@ -2,12 +2,14 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebas
 import {
   GoogleAuthProvider,
   browserLocalPersistence,
-  getAuth,
+  browserPopupRedirectResolver,
+  browserSessionPersistence,
+  indexedDBLocalPersistence,
   getRedirectResult,
+  initializeAuth,
   linkWithPopup,
   linkWithRedirect,
   onAuthStateChanged,
-  setPersistence,
   signInAnonymously,
   signInWithPopup,
   signInWithRedirect,
@@ -270,8 +272,14 @@ async function bootstrapFirebase() {
   try {
     state.app = initializeApp(clientConfig.firebase);
     state.db = getFirestore(state.app);
-    state.auth = getAuth(state.app);
-    await setPersistence(state.auth, browserLocalPersistence);
+    state.auth = initializeAuth(state.app, {
+      persistence: [
+        indexedDBLocalPersistence,
+        browserLocalPersistence,
+        browserSessionPersistence,
+      ],
+      popupRedirectResolver: browserPopupRedirectResolver,
+    });
     try {
       const redirectResult = await getRedirectResult(state.auth);
       if (redirectResult?.user) {
