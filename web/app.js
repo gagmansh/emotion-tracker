@@ -3,11 +3,14 @@ import {
   GoogleAuthProvider,
   browserLocalPersistence,
   getAuth,
+  getRedirectResult,
   linkWithPopup,
+  linkWithRedirect,
   onAuthStateChanged,
   setPersistence,
   signInAnonymously,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
 } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
 import {
@@ -150,9 +153,23 @@ function wireEvents() {
       return;
     }
 
+    if (isEmbeddedBrowser()) {
+      showToast("카카오톡·앱 내 브라우저 대신 Chrome 또는 Safari에서 열어주세요", true);
+      return;
+    }
+
     elements.googleLoginButton.disabled = true;
 
     try {
+      if (shouldUseRedirectAuth()) {
+        if (state.user?.isAnonymous) {
+          await linkWithRedirect(state.user, googleProvider);
+        } else {
+          await signInWithRedirect(state.auth, googleProvider);
+        }
+        return;
+      }
+
       if (state.user?.isAnonymous) {
         try {
           await linkWithPopup(state.user, googleProvider);
@@ -255,6 +272,14 @@ async function bootstrapFirebase() {
     state.db = getFirestore(state.app);
     state.auth = getAuth(state.app);
     await setPersistence(state.auth, browserLocalPersistence);
+    try {
+      const redirectResult = await getRedirectResult(state.auth);
+      if (redirectResult?.user) {
+        showToast("Google 로그인 완료");
+      }
+    } catch (error) {
+      showToast(readableError(error), true);
+    }
     state.isConfigured = true;
     elements.setupBanner.hidden = true;
     setConnectionState("연결 준비됨", "warn");
@@ -754,6 +779,15 @@ function getPeriodStart(period) {
     return start;
   }
   return null;
+}
+
+function shouldUseRedirectAuth() {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+function isEmbeddedBrowser() {
+  const ua = navigator.userAgent || "";
+  return /KAKAOTALK|FBAN|FBAV|Instagram|NAVER|Line|wv|TikTok|Twitter/i.test(ua);
 }
 
 function setConnectionState(message, level) {
