@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: emotion-tracker-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: APP_STORAGE_BACKEND
+        value: firestore
+      - key: FIRESTORE_COLLECTION_NAME
+        value: emotion_records
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: APP_CORS_ORIGINS
+        sync: false
