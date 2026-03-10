@@ -1,281 +1,311 @@
 # Emotion Tracker
 
-감정 기록과 HQ(Happiness Quotient) 분석을 위한 웹 프로젝트입니다.
+Firebase Auth와 Firestore에 직접 연결되는 감정 기록 웹앱입니다.  
+이제 백엔드 없이 `web/` 폴더만 Cloudflare Pages에 올려서 공개할 수 있습니다.
 
-이 저장소는 이제 다음 구조를 기준으로 사용합니다.
-
-- 프론트엔드: HTML + CSS + JavaScript 정적 웹앱
-- 백엔드: FastAPI
-- 저장소: Firebase Firestore
-- 배포 방향:
-  - 프론트엔드: Cloudflare Pages
-  - 백엔드 API: 별도 Python 호스팅(Render, Railway, Fly.io, Google Cloud Run 등)
-  - 도메인/프록시: Cloudflare
-
-## 1. 구조
+## 현재 구조
 
 ```text
 emotion_tracker/
-├─ backend/
-│  └─ app/
-│     ├─ main.py
-│     ├─ api/routes/
-│     ├─ services/
-│     ├─ repositories/
-│     ├─ schemas/
-│     └─ core/
 ├─ web/
 │  ├─ index.html
 │  ├─ styles.css
 │  ├─ app.js
 │  ├─ config.js
-│  └─ config.example.js
-├─ hq_logic.py
-├─ analytics.py
-├─ run_backend.bat
+│  ├─ config.example.js
+│  └─ _headers
+├─ firestore.rules
 ├─ run_frontend.bat
 ├─ run_stack.bat
-├─ requirements.txt
-├─ .env.example
-└─ secrets/
-   └─ firebase_service_account.json
+├─ hq_logic.py
+├─ analytics.py
+└─ backend/   # 예전 API 실험용 코드, 현재 공개 배포에는 필수 아님
 ```
 
-## 2. 현재 동작 방식
+## 이 버전에서 바뀐 점
 
-### 로컬 개발
+- 프론트엔드가 FastAPI를 거치지 않고 Firebase에 직접 연결됩니다.
+- Firebase Authentication의 익명 로그인으로 사용자별 데이터가 분리됩니다.
+- 감정 저장, HQ 계산, 최빈 감정 계산, 시간대별 HQ 변화, 요일별 HQ 변화가 브라우저에서 바로 처리됩니다.
+- Cloudflare Pages에 `web/` 폴더만 배포하면 됩니다.
 
-- 백엔드: `http://127.0.0.1:8000`
-- 정적 웹 프론트: `http://127.0.0.1:5500`
-- 백엔드가 정적 사이트를 직접 서빙할 때: `http://127.0.0.1:8000/app/`
+## 1. Firebase에서 먼저 해야 할 것
 
-### 실제 서비스 배포
+이 프로젝트는 `Firebase Web App 설정값`이 필요합니다.  
+서비스 계정 JSON이 아니라, 웹앱용 공개 설정값입니다.
 
-권장 구조:
+### 1-1. Firebase 프로젝트 준비
 
-```text
-사용자
-  -> https://app.example.com      (Cloudflare Pages)
-  -> https://api.example.com      (FastAPI 백엔드 + Cloudflare 프록시)
-  -> Firestore
-```
-
-즉, Cloudflare는 도메인/HTTPS/프록시 계층이고, Python 백엔드 자체는 별도 호스팅이 필요합니다.
-
-## 3. 먼저 설치할 것
-
-### 3-1. 가상환경 생성
-
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-```
-
-### 3-2. 패키지 설치
-
-```powershell
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-## 4. Firebase Firestore 준비
-
-이 프로젝트를 Firestore로 실제 연결하려면 Firebase 프로젝트와 서비스 계정 JSON이 필요합니다.
-
-### 4-1. Firebase 프로젝트 생성
-
-1. Firebase Console로 이동합니다.
-2. 새 프로젝트를 만듭니다.
-3. 왼쪽 메뉴에서 `Firestore Database`를 활성화합니다.
+1. Firebase Console에 들어갑니다.
+2. 이미 만든 프로젝트를 선택합니다.
+3. 아직 Firestore를 안 켰다면 `Build -> Firestore Database -> Create database`로 생성합니다.
 
 공식 문서:
+- Firebase 웹 설정: https://firebase.google.com/docs/web/setup
+- Firestore 시작: https://firebase.google.com/docs/firestore
 
-- Firebase Admin SDK setup:
-  https://firebase.google.com/docs/admin/setup
-- Firestore:
-  https://firebase.google.com/docs/firestore
+### 1-2. 웹 앱 등록
 
-### 4-2. 서비스 계정 JSON 다운로드
+1. Firebase Console에서 프로젝트를 엽니다.
+2. 상단의 `프로젝트 개요` 화면에서 `웹 아이콘(</>)`을 누릅니다.
+3. 앱 닉네임을 입력합니다.
+4. `앱 등록`을 누릅니다.
+5. 화면에 보이는 `firebaseConfig` 값을 복사합니다.
 
-1. Firebase Console에서 `프로젝트 설정`
-2. `서비스 계정`
-3. `새 비공개 키 생성`
-4. JSON 파일 다운로드
+복사해야 하는 값은 보통 이 다섯 가지입니다.
 
-### 4-3. JSON 파일 저장
+```js
+const firebaseConfig = {
+  apiKey: "...",
+  authDomain: "...",
+  projectId: "...",
+  appId: "...",
+  messagingSenderId: "...",
+};
+```
 
-프로젝트 루트에 아래처럼 넣습니다.
+주의:
+- 이 값들은 웹앱 설정값이라 브라우저에 들어가도 됩니다.
+- 비밀값은 아닙니다.
+- 대신 접근 제어는 `Authentication + Firestore Rules`로 막아야 합니다.
+
+참고:
+- Firebase 프로젝트 API 키 설명: https://firebase.google.com/docs/projects/api-keys
+
+### 1-3. 익명 로그인 활성화
+
+이 앱은 각 사용자를 익명 계정으로 자동 로그인시켜서 데이터를 분리합니다.
+
+1. Firebase Console -> `Build -> Authentication`
+2. `Get started`
+3. `Sign-in method`
+4. `Anonymous` 활성화
+5. 저장
+
+공식 문서:
+- 익명 로그인: https://firebase.google.com/docs/auth/web/anonymous-auth
+
+## 2. 프로젝트 파일에 Firebase 설정 넣기
+
+파일:
+[web/config.js](C:/Users/prist/OneDrive/바탕%20화면/emotion_tracker/web/config.js)
+
+현재 기본값은 비어 있습니다. 아래처럼 채우세요.
+
+```js
+window.EMOTION_TRACKER_CONFIG = {
+  firebase: {
+    apiKey: "YOUR_PUBLIC_API_KEY",
+    authDomain: "your-project-id.firebaseapp.com",
+    projectId: "your-project-id",
+    appId: "1:1234567890:web:abcdef123456",
+    messagingSenderId: "1234567890",
+  },
+  app: {
+    collectionName: "emotion_records",
+  },
+};
+```
+
+예시 파일은 여기 있습니다.
+[web/config.example.js](C:/Users/prist/OneDrive/바탕%20화면/emotion_tracker/web/config.example.js)
+
+## 3. Firestore 보안 규칙 적용
+
+파일:
+[firestore.rules](C:/Users/prist/OneDrive/바탕%20화면/emotion_tracker/firestore.rules)
+
+이 규칙은 다음을 보장합니다.
+
+- 로그인한 사용자만 자기 데이터에 접근 가능
+- `users/{uid}` 문서는 자기 것만 읽고 쓸 수 있음
+- `users/{uid}/emotion_records/*`도 자기 것만 생성 가능
+- 기록 필드 형식과 길이를 제한
+
+### 3-1. 가장 쉬운 적용 방법
+
+1. Firebase Console -> `Build -> Firestore Database`
+2. `Rules` 탭
+3. 현재 내용을 전부 지우고 `firestore.rules` 내용으로 교체
+4. `Publish`
+
+### 3-2. 데이터 구조
+
+이 앱은 Firestore에 이렇게 저장합니다.
 
 ```text
-emotion_tracker/
-└─ secrets/
-   └─ firebase_service_account.json
+users/{uid}
+users/{uid}/emotion_records/{recordId}
 ```
 
-## 5. `.env` 설정
+`users/{uid}` 문서:
+- 현재 HQ
+- 누적 기록 수
+- 마지막 감정
 
-`.env.example`를 복사해서 `.env`를 만듭니다.
+`users/{uid}/emotion_records/{recordId}` 문서:
+- emotion
+- emotionScore
+- intensity
+- note
+- hqPrevious
+- hqCurrent
+- deltaHq
+- adjustmentFactor
+- recordedAt
 
-예시:
+## 4. 로컬에서 실행하기
 
-```env
-DEFAULT_USER_ID=demo_user
-LOCAL_DATA_PATH=./data/emotion_records.json
-FRONTEND_API_BASE_URL=http://127.0.0.1:8000
-APP_STORAGE_BACKEND=firestore
-FIREBASE_SERVICE_ACCOUNT_PATH=./secrets/firebase_service_account.json
-FIRESTORE_COLLECTION_NAME=emotion_records
-APP_CORS_ORIGINS=http://localhost:5500,http://127.0.0.1:5500,http://localhost:8502,http://127.0.0.1:8502,https://app.example.com
-```
+이 앱은 정적 웹앱입니다.  
+로컬 테스트는 간단한 HTTP 서버만 있으면 됩니다.
 
-중요 항목:
-
-- `APP_STORAGE_BACKEND=firestore`
-  Firestore 사용 활성화
-- `FIREBASE_SERVICE_ACCOUNT_PATH`
-  서비스 계정 JSON 경로
-- `APP_CORS_ORIGINS`
-  웹 프론트가 접근할 도메인 목록
-
-## 6. 로컬 실행 방법
-
-### 방법 A. 백엔드만 실행
-
-```powershell
-.\run_backend.bat
-```
-
-이 경우:
-
-- API: `http://127.0.0.1:8000`
-- 웹앱: `http://127.0.0.1:8000/app/`
-- API 문서: `http://127.0.0.1:8000/docs`
-
-### 방법 B. 백엔드 + 정적 프론트 같이 실행
-
-```powershell
-.\run_stack.bat
-```
-
-이 경우:
-
-- API: `http://127.0.0.1:8000`
-- 정적 프론트: `http://127.0.0.1:5500`
-
-### 방법 C. 프론트만 미리보기
+### 방법 1. 배치 파일 실행
 
 ```powershell
 .\run_frontend.bat
 ```
 
-주의:
-
-- 프론트만 띄우면 실제 데이터 저장/조회는 안 됩니다.
-- 백엔드가 같이 떠 있어야 합니다.
-
-## 7. 웹 프론트엔드 설정
-
-정적 웹앱은 `web/config.js`를 읽어 API 주소를 결정합니다.
-
-로컬 기본값:
-
-```js
-window.EMOTION_TRACKER_CONFIG = {
-  API_BASE_URL: "http://127.0.0.1:8000",
-};
-```
-
-배포 시에는 이 파일을 바꿔야 합니다.
-
-예:
-
-```js
-window.EMOTION_TRACKER_CONFIG = {
-  API_BASE_URL: "https://api.example.com",
-};
-```
-
-## 8. Cloudflare Pages에 프론트엔드 배포
-
-정적 프론트엔드는 `web/` 폴더를 그대로 Cloudflare Pages에 올리면 됩니다.
-
-공식 문서:
-
-- Pages 시작 가이드:
-  https://developers.cloudflare.com/pages/get-started/guide/
-- Pages Custom Domains:
-  https://developers.cloudflare.com/pages/configuration/custom-domains/
-
-### 8-1. 배포 절차
-
-1. Git 저장소를 GitHub 등에 올립니다.
-2. Cloudflare Pages에서 새 프로젝트를 만듭니다.
-3. 저장소를 연결합니다.
-4. 프론트엔드 루트 디렉터리를 `web`으로 지정합니다.
-5. 빌드 명령은 비워도 됩니다.
-6. 배포합니다.
-
-### 8-2. 커스텀 도메인 연결
-
-예:
-
-- `app.example.com` -> Cloudflare Pages
-- `api.example.com` -> 백엔드 서버
-
-그 다음 `web/config.js`의 `API_BASE_URL`을 `https://api.example.com`으로 바꿉니다.
-
-## 9. 백엔드 배포
-
-이 저장소의 백엔드는 FastAPI이므로 Cloudflare Pages에 직접 올리는 대상이 아닙니다.
-
-권장 배포 대상:
-
-- Render
-- Railway
-- Fly.io
-- Google Cloud Run
-
-실행 명령은 보통 아래와 같습니다.
+또는
 
 ```powershell
-python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+.\run_stack.bat
 ```
 
-배포 후 공개 URL을 받으면 Cloudflare DNS에서 `api.example.com`으로 연결하면 됩니다.
+주소:
 
-## 10. API 목록
+```text
+http://127.0.0.1:5500
+```
 
-- `GET /health`
-- `GET /storage`
-- `GET /api/v1/meta`
-- `GET /api/v1/users/{user_id}/hq`
-- `POST /api/v1/users/{user_id}/records`
-- `GET /api/v1/users/{user_id}/records`
-- `GET /api/v1/users/{user_id}/analytics?period=today|week|month|all`
+### 방법 2. 직접 실행
 
-## 11. 중요한 현재 상태
+```powershell
+python -m http.server 5500 --bind 127.0.0.1 --directory web
+```
 
-현재 코드에서 이미 준비된 것:
+## 5. Cloudflare Pages로 배포하기
 
-- HQ 계산 로직
-- 최빈 감정 / 시간대별 HQ / 요일별 HQ 분석
-- FastAPI API 계층
-- Firestore 저장소 어댑터
-- 정적 HTML/CSS/JS 프론트엔드
-- Cloudflare Pages에 올릴 수 있는 `web/` 폴더
+이제는 백엔드가 없으므로 Cloudflare Pages만 있으면 됩니다.
 
-현재 직접 검증하지 못한 것:
+공식 문서:
+- Cloudflare Pages 시작: https://developers.cloudflare.com/pages/get-started/guide/
+- 커스텀 도메인: https://developers.cloudflare.com/pages/configuration/custom-domains/
 
-- 실제 Firestore 접속
-- 실제 Cloudflare Pages 배포
+### 5-1. GitHub에 코드 올리기
 
-이 두 가지는 서비스 계정 JSON과 실제 배포 계정이 있어야 최종 검증할 수 있습니다.
+현재 저장소를 GitHub에 푸시합니다.
 
-## 12. 다음으로 해야 할 일
+### 5-2. Cloudflare Pages 프로젝트 만들기
 
-1. Firebase 서비스 계정 JSON을 `secrets/firebase_service_account.json`에 넣기
-2. `.env`를 Firestore 기준으로 작성하기
-3. `.\run_backend.bat`로 Firestore 연결 확인하기
-4. `.\run_stack.bat`로 정적 웹앱과 API 함께 확인하기
-5. `web/config.js`를 실제 API 도메인으로 바꾸기
-6. `web/` 폴더를 Cloudflare Pages에 배포하기
+1. Cloudflare Dashboard 로그인
+2. `Workers & Pages`
+3. `Create application`
+4. `Pages`
+5. `Connect to Git`
+6. GitHub 저장소 선택
+
+### 5-3. 빌드 설정
+
+이 프로젝트는 빌드가 필요 없는 정적 사이트입니다.
+
+- Framework preset: `None`
+- Build command: 비워둠
+- Build output directory: `web`
+
+### 5-4. 배포 후 확인
+
+배포가 끝나면 Cloudflare가 `https://something.pages.dev` 주소를 줍니다.  
+그 주소로 접속해서 아래를 확인하세요.
+
+- 익명 로그인 자동 완료
+- 감정 저장 버튼 동작
+- Firestore에 실제 기록 생성
+- 대시보드 그래프와 최근 기록 반영
+
+## 6. 도메인 연결
+
+1. Cloudflare Pages 프로젝트 화면으로 이동
+2. `Custom domains`
+3. 원하는 도메인 추가
+4. 안내에 따라 DNS 연결
+
+예시:
+
+```text
+https://mood.yourdomain.com
+```
+
+## 7. 현재 프론트에서 하는 일
+
+파일:
+[web/app.js](C:/Users/prist/OneDrive/바탕%20화면/emotion_tracker/web/app.js)
+
+여기서 처리하는 기능:
+
+- Firebase 초기화
+- 익명 로그인
+- Firestore 실시간 구독
+- 감정 저장 트랜잭션
+- HQ 계산
+- 최빈 감정 계산
+- 시간대별 HQ 평균
+- 요일별 HQ 평균
+
+## 8. HQ 계산식
+
+현재 HQ 로직은 Python 버전과 맞춰져 있습니다.
+
+```text
+delta_hq = emotion_score * (intensity / 15)
+adjustment_factor = 1 - abs(hq_previous - 50) / 100
+adjusted_delta = delta_hq * adjustment_factor
+hq_current = clamp(hq_previous + adjusted_delta, 0, 100)
+```
+
+기준 점수:
+
+- 행복: `9.0`
+- 평온: `0.0`
+- 슬픔: `-7.5`
+- 불안: `-6.5`
+- 분노: `-9.0`
+
+## 9. 트러블슈팅
+
+### 페이지는 열리는데 상단에 설정 필요가 뜬다
+
+원인:
+- [web/config.js](C:/Users/prist/OneDrive/바탕%20화면/emotion_tracker/web/config.js)가 비어 있음
+
+해결:
+- Firebase Console에서 웹앱 설정값을 다시 복사해서 넣습니다.
+
+### 저장 버튼을 눌렀는데 권한 오류가 난다
+
+원인:
+- Firestore Rules가 적용되지 않았거나
+- Anonymous Auth가 꺼져 있음
+
+해결:
+1. Authentication에서 Anonymous 활성화 확인
+2. Firestore Rules 탭에 [firestore.rules](C:/Users/prist/OneDrive/바탕%20화면/emotion_tracker/firestore.rules) 적용
+
+### Cloudflare Pages에 올렸는데 저장이 안 된다
+
+원인:
+- Firebase 설정값 누락
+- Firestore Rules 미적용
+- 브라우저 콘솔 에러 존재
+
+해결:
+1. `web/config.js` 값 확인
+2. Rules 확인
+3. 브라우저 개발자도구 콘솔 확인
+
+## 10. 다음에 확장할 수 있는 것
+
+- Google 로그인 추가
+- 감정 종류 커스터마이징
+- App Check 추가
+- 주간/월간 리포트 카드 추가
+- PWA 오프라인 지원

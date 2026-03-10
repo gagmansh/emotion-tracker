@@ -1,36 +1,77 @@
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
+import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
+import {
+  Timestamp,
+  collection,
+  doc,
+  getDoc,
+  getFirestore,
+  increment,
+  onSnapshot,
+  orderBy,
+  query,
+  runTransaction,
+  serverTimestamp,
+  setDoc,
+  where,
+} from "https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js";
+
+const EMOTION_OPTIONS = [
+  { key: "행복", score: 9.0 },
+  { key: "평온", score: 0.0 },
+  { key: "슬픔", score: -7.5 },
+  { key: "불안", score: -6.5 },
+  { key: "분노", score: -9.0 },
+];
+
+const PERIOD_LABELS = {
+  today: "오늘",
+  week: "이번 주",
+  month: "이번 달",
+  all: "전체",
+};
+
+const WEEKDAY_LABELS = ["월", "화", "수", "목", "금", "토", "일"];
+const DEFAULT_HQ = 50;
+
 const state = {
-  apiBaseUrl: "",
-  userId: "",
+  app: null,
+  db: null,
+  auth: null,
+  collectionName: "emotion_records",
+  user: null,
+  projectId: "-",
+  nickname: "",
   selectedEmotion: "행복",
   intensity: 5,
-  currentHq: 50,
-  selectedPeriod: "today",
-  emotionScores: {
-    행복: 9.0,
-    평온: 0.0,
-    슬픔: -7.5,
-    불안: -6.5,
-    분노: -9.0,
-  },
+  currentHq: DEFAULT_HQ,
+  lifetimeRecordCount: 0,
+  selectedPeriod: "week",
+  records: [],
+  unsubscribeSummary: null,
+  unsubscribeRecords: null,
+  isConfigured: false,
 };
 
 const elements = {};
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   cacheElements();
-  hydrateState();
+  hydrateLocalState();
   wireEvents();
   renderEmotionPicker();
   renderPeriodFilter();
   syncInputsFromState();
+  renderIdentity();
   refreshPreview();
-  bootstrap();
+  await bootstrapFirebase();
 });
 
 function cacheElements() {
-  elements.apiBaseUrlInput = document.querySelector("#api-base-url");
-  elements.userIdInput = document.querySelector("#user-id");
-  elements.saveSettingsButton = document.querySelector("#save-settings-button");
+  elements.setupBanner = document.querySelector("#setup-banner");
+  elements.nicknameInput = document.querySelector("#nickname-input");
+  elements.nicknameBadge = document.querySelector("#nickname-badge");
+  elements.saveNicknameButton = document.querySelector("#save-nickname-button");
   elements.refreshButton = document.querySelector("#refresh-button");
   elements.emotionPicker = document.querySelector("#emotion-picker");
   elements.intensityRange = document.querySelector("#intensity-range");
@@ -55,35 +96,37 @@ function cacheElements() {
   elements.recordsList = document.querySelector("#records-list");
 
   elements.statusDot = document.querySelector("#status-dot");
-  elements.healthLabel = document.querySelector("#health-label");
-  elements.storageBackendLabel = document.querySelector("#storage-backend-label");
+  elements.connectionLabel = document.querySelector("#connection-label");
+  elements.authStatusLabel = document.querySelector("#auth-status-label");
+  elements.projectIdLabel = document.querySelector("#project-id-label");
+  elements.userKeyLabel = document.querySelector("#user-key-label");
+  elements.heroCurrentHq = document.querySelector("#hero-current-hq");
+  elements.lifetimeRecordCount = document.querySelector("#lifetime-record-count");
   elements.toast = document.querySelector("#toast");
 }
 
-function hydrateState() {
-  const config = window.EMOTION_TRACKER_CONFIG || {};
-  const storedApiBaseUrl = localStorage.getItem("emotion-tracker-api-base-url");
-  const storedUserId = localStorage.getItem("emotion-tracker-user-id");
-
-  state.apiBaseUrl = storedApiBaseUrl || config.API_BASE_URL || window.location.origin;
-  state.userId = storedUserId || buildGuestId();
+function hydrateLocalState() {
+  state.nickname = localStorage.getItem("emotion-tracker-nickname") || "";
 }
 
 function wireEvents() {
-  elements.saveSettingsButton.addEventListener("click", () => {
-    state.apiBaseUrl = normalizeApiBaseUrl(elements.apiBaseUrlInput.value);
-    state.userId = elements.userIdInput.value.trim() || buildGuestId();
-
-    localStorage.setItem("emotion-tracker-api-base-url", state.apiBaseUrl);
-    localStorage.setItem("emotion-tracker-user-id", state.userId);
-
-    syncInputsFromState();
-    refreshPreview();
-    bootstrap();
-    showToast("설정을 저장했습니다.");
+  elements.saveNicknameButton.addEventListener("click", () => {
+    state.nickname = elements.nicknameInput.value.trim();
+    localStorage.setItem("emotion-tracker-nickname", state.nickname);
+    renderIdentity();
+    showToast("닉네임을 저장했습니다.");
   });
 
-  elements.refreshButton.addEventListener("click", () => bootstrap());
+  elements.refreshButton.addEventListener("click", () => {
+    if (!state.isConfigured || !state.user) {
+      showToast("Firebase 연결이 아직 준비되지 않았습니다.", true);
+      return;
+    }
+
+    subscribeSummary();
+    subscribeRecords();
+    showToast("실시간 구독을 다시 연결했습니다.");
+  });
 
   elements.intensityRange.addEventListener("input", (event) => {
     state.intensity = Number(event.target.value);
@@ -92,118 +135,207 @@ function wireEvents() {
   });
 
   elements.saveRecordButton.addEventListener("click", async () => {
-    try {
-      await apiRequest(`/api/v1/users/${encodeURIComponent(state.userId)}/records`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          emotion: state.selectedEmotion,
-          intensity: state.intensity,
-          note: elements.noteInput.value.trim(),
-        }),
-      });
+    if (!state.db || !state.user) {
+      showToast("먼저 Firebase 연결을 완료해야 합니다.", true);
+      return;
+    }
 
+    const note = elements.noteInput.value.trim();
+    elements.saveRecordButton.disabled = true;
+
+    try {
+      const record = await persistEmotionRecord(note);
+      state.currentHq = record.hqCurrent;
       elements.noteInput.value = "";
-      showToast("감정 기록을 저장했습니다.");
-      await loadCurrentHq();
-      await loadAnalytics();
       refreshPreview();
+      showToast("감정을 저장했습니다.");
     } catch (error) {
-      showToast(error.message, true);
+      showToast(readableError(error), true);
+    } finally {
+      elements.saveRecordButton.disabled = false;
     }
   });
 }
 
-async function bootstrap() {
-  syncInputsFromState();
-  await loadMeta();
-  await loadHealth();
-  await loadCurrentHq();
-  await loadAnalytics();
-  refreshPreview();
-}
+async function bootstrapFirebase() {
+  const clientConfig = getClientConfig();
+  state.collectionName = clientConfig.collectionName;
+  state.projectId = clientConfig.firebase.projectId || "-";
+  renderIdentity();
 
-function syncInputsFromState() {
-  elements.apiBaseUrlInput.value = state.apiBaseUrl;
-  elements.userIdInput.value = state.userId;
-  elements.intensityRange.value = String(state.intensity);
-  elements.intensityLabel.textContent = String(state.intensity);
-}
+  if (!clientConfig.isValid) {
+    setConnectionState("설정 필요", "warn");
+    elements.authStatusLabel.textContent = "설정 대기";
+    elements.setupBanner.hidden = false;
+    elements.saveRecordButton.disabled = true;
+    return;
+  }
 
-async function loadMeta() {
   try {
-    const payload = await apiRequest("/api/v1/meta");
-    state.emotionScores = Object.fromEntries(
-      payload.emotions.map((emotion) => [emotion.key, Number(emotion.score)])
-    );
-    if (!state.emotionScores[state.selectedEmotion]) {
-      state.selectedEmotion = payload.emotions[0]?.key || "행복";
+    state.app = initializeApp(clientConfig.firebase);
+    state.db = getFirestore(state.app);
+    state.auth = getAuth(state.app);
+    state.isConfigured = true;
+    elements.setupBanner.hidden = true;
+    setConnectionState("Firebase 연결 준비됨", "warn");
+
+    onAuthStateChanged(state.auth, async (user) => {
+      if (!user) {
+        try {
+          await signInAnonymously(state.auth);
+        } catch (error) {
+          setConnectionState("익명 로그인 실패", "error");
+          elements.authStatusLabel.textContent = "실패";
+          showToast(readableError(error), true);
+        }
+        return;
+      }
+
+      state.user = user;
+      elements.authStatusLabel.textContent = user.isAnonymous ? "익명 로그인" : "로그인됨";
+      renderIdentity();
+
+      await ensureUserSummaryDoc();
+      subscribeSummary();
+      subscribeRecords();
+      setConnectionState("실시간 동기화 연결됨", "ok");
+      elements.saveRecordButton.disabled = false;
+    });
+  } catch (error) {
+    setConnectionState("Firebase 초기화 실패", "error");
+    showToast(readableError(error), true);
+  }
+}
+
+async function ensureUserSummaryDoc() {
+  const userRef = getUserDocRef();
+  const snapshot = await getDoc(userRef);
+  if (snapshot.exists()) {
+    return;
+  }
+
+  await setDoc(
+    userRef,
+    {
+      currentHq: DEFAULT_HQ,
+      recordCount: 0,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
+async function persistEmotionRecord(note) {
+  const userRef = getUserDocRef();
+  const recordsRef = collection(userRef, state.collectionName);
+  let savedRecord = null;
+
+  await runTransaction(state.db, async (transaction) => {
+    const summarySnapshot = await transaction.get(userRef);
+    const summaryData = summarySnapshot.exists() ? summarySnapshot.data() : {};
+    const previousHq = Number(summaryData.currentHq ?? DEFAULT_HQ);
+    const calculation = calculateHq(previousHq, state.selectedEmotion, state.intensity);
+    const recordedAt = Timestamp.now();
+    const recordRef = doc(recordsRef);
+
+    transaction.set(recordRef, {
+      emotion: calculation.emotion,
+      emotionScore: calculation.emotionScore,
+      intensity: calculation.intensity,
+      note,
+      hqPrevious: calculation.hqPrevious,
+      hqCurrent: calculation.hqCurrent,
+      deltaHq: calculation.deltaHq,
+      adjustmentFactor: calculation.adjustmentFactor,
+      recordedAt,
+      createdAt: serverTimestamp(),
+    });
+
+    const summaryUpdate = {
+      currentHq: calculation.hqCurrent,
+      lastEmotion: calculation.emotion,
+      lastRecordedAt: recordedAt,
+      recordCount: increment(1),
+      updatedAt: serverTimestamp(),
+    };
+
+    if (!summarySnapshot.exists()) {
+      summaryUpdate.createdAt = serverTimestamp();
     }
-    renderEmotionPicker();
-    refreshPreview();
-  } catch (error) {
-    showToast(`메타 데이터를 불러오지 못했습니다: ${error.message}`, true);
-  }
+
+    transaction.set(userRef, summaryUpdate, { merge: true });
+
+    savedRecord = {
+      id: recordRef.id,
+      ...calculation,
+      note,
+      recordedAt: recordedAt.toDate(),
+    };
+  });
+
+  return savedRecord;
 }
 
-async function loadHealth() {
-  try {
-    const [health, storage] = await Promise.all([
-      apiRequest("/health"),
-      apiRequest("/storage"),
-    ]);
-    elements.statusDot.className = "status-dot ok";
-    elements.healthLabel.textContent = "백엔드 연결 완료";
-    elements.storageBackendLabel.textContent = storage.backend || health.storage_backend;
-  } catch (error) {
-    elements.statusDot.className = "status-dot error";
-    elements.healthLabel.textContent = "백엔드 연결 실패";
-    elements.storageBackendLabel.textContent = "Unavailable";
-    showToast(`백엔드 연결 실패: ${error.message}`, true);
-  }
+function subscribeSummary() {
+  disposeSubscription("unsubscribeSummary");
+
+  state.unsubscribeSummary = onSnapshot(
+    getUserDocRef(),
+    (snapshot) => {
+      const data = snapshot.exists() ? snapshot.data() : {};
+      state.currentHq = Number(data.currentHq ?? DEFAULT_HQ);
+      state.lifetimeRecordCount = Number(data.recordCount ?? 0);
+      elements.heroCurrentHq.textContent = formatFixed(state.currentHq);
+      elements.lifetimeRecordCount.textContent = `${state.lifetimeRecordCount}`;
+      refreshPreview();
+    },
+    (error) => {
+      setConnectionState("요약 데이터 오류", "error");
+      showToast(readableError(error), true);
+    }
+  );
 }
 
-async function loadCurrentHq() {
-  try {
-    const payload = await apiRequest(
-      `/api/v1/users/${encodeURIComponent(state.userId)}/hq`
-    );
-    state.currentHq = Number(payload.current_hq || 50);
-  } catch (error) {
-    state.currentHq = 50;
-    showToast(`현재 HQ를 가져오지 못했습니다: ${error.message}`, true);
-  }
-}
+function subscribeRecords() {
+  disposeSubscription("unsubscribeRecords");
 
-async function loadAnalytics() {
-  try {
-    const payload = await apiRequest(
-      `/api/v1/users/${encodeURIComponent(state.userId)}/analytics?period=${state.selectedPeriod}`
-    );
-    renderSummary(payload.summary);
-    renderTimelineChart(payload.records);
-    renderBarsChart(elements.hourlyChart, payload.hourly, "hour_label");
-    renderBarsChart(elements.weekdayChart, payload.weekday, "weekday");
-    renderRecords(payload.records);
-  } catch (error) {
-    showToast(`분석 데이터를 가져오지 못했습니다: ${error.message}`, true);
+  const constraints = [];
+  const startDate = getPeriodStart(state.selectedPeriod);
+  if (startDate) {
+    constraints.push(where("recordedAt", ">=", Timestamp.fromDate(startDate)));
   }
+  constraints.push(orderBy("recordedAt", "asc"));
+
+  const recordsQuery = query(
+    collection(getUserDocRef(), state.collectionName),
+    ...constraints
+  );
+
+  state.unsubscribeRecords = onSnapshot(
+    recordsQuery,
+    (snapshot) => {
+      state.records = snapshot.docs.map((recordDoc) => normalizeRecord(recordDoc.id, recordDoc.data()));
+      renderAnalytics();
+      renderRecords();
+    },
+    (error) => {
+      setConnectionState("기록 동기화 오류", "error");
+      showToast(readableError(error), true);
+    }
+  );
 }
 
 function renderEmotionPicker() {
-  const emotions = Object.entries(state.emotionScores);
-  elements.emotionPicker.innerHTML = emotions
-    .map(([emotion, score]) => {
-      const activeClass = state.selectedEmotion === emotion ? "active" : "";
-      return `
-        <button class="emotion-button ${activeClass}" data-emotion="${emotion}">
-          ${emotion} <small>(${formatNumber(score)})</small>
-        </button>
-      `;
-    })
-    .join("");
+  elements.emotionPicker.innerHTML = EMOTION_OPTIONS.map((emotion) => {
+    const activeClass = emotion.key === state.selectedEmotion ? "active" : "";
+    return `
+      <button class="emotion-button ${activeClass}" data-emotion="${emotion.key}">
+        <strong>${emotion.key}</strong>
+        <small>${formatSigned(emotion.score)}</small>
+      </button>
+    `;
+  }).join("");
 
   elements.emotionPicker.querySelectorAll(".emotion-button").forEach((button) => {
     button.addEventListener("click", () => {
@@ -215,52 +347,70 @@ function renderEmotionPicker() {
 }
 
 function renderPeriodFilter() {
-  const periodLabels = {
-    today: "오늘",
-    week: "이번 주",
-    month: "이번 달",
-    all: "전체",
-  };
-
-  elements.periodFilter.innerHTML = Object.entries(periodLabels)
+  elements.periodFilter.innerHTML = Object.entries(PERIOD_LABELS)
     .map(([period, label]) => {
-      const activeClass = state.selectedPeriod === period ? "active" : "";
+      const activeClass = period === state.selectedPeriod ? "active" : "";
       return `<button class="period-button ${activeClass}" data-period="${period}">${label}</button>`;
     })
     .join("");
 
   elements.periodFilter.querySelectorAll(".period-button").forEach((button) => {
-    button.addEventListener("click", async () => {
+    button.addEventListener("click", () => {
       state.selectedPeriod = button.dataset.period;
       renderPeriodFilter();
-      await loadAnalytics();
+      if (state.user) {
+        subscribeRecords();
+      }
     });
   });
 }
 
-function refreshPreview() {
-  const score = Number(state.emotionScores[state.selectedEmotion] || 0);
-  const deltaHq = score * (state.intensity / 15);
-  const adjustmentFactor = 1 - Math.abs(state.currentHq - 50) / 100;
-  const adjustedDelta = deltaHq * adjustmentFactor;
-  const nextHq = clamp(state.currentHq + adjustedDelta, 0, 100);
+function renderAnalytics() {
+  const summary = buildSummary(state.records, state.currentHq);
+  const hourly = calculateHourlyHqChange(state.records);
+  const weekday = calculateWeekdayHqChange(state.records);
 
-  elements.previewCurrentHq.textContent = formatFixed(state.currentHq);
-  elements.previewEmotionScore.textContent = formatFixed(score);
-  elements.previewDeltaHq.textContent = `${adjustedDelta >= 0 ? "+" : ""}${formatFixed(adjustedDelta)}`;
-  elements.previewNextHq.textContent = formatFixed(nextHq);
+  elements.summaryRecordCount.textContent = `${summary.recordCount}`;
+  elements.summaryMostEmotion.textContent = summary.mostCommonEmotion || "-";
+  elements.summaryAverageHq.textContent = summary.averageHq == null ? "-" : formatFixed(summary.averageHq);
+  elements.summaryCurrentHq.textContent = formatFixed(summary.currentHq);
+
+  renderTimelineChart(state.records);
+  renderBarsChart(elements.hourlyChart, hourly, "hourLabel");
+  renderBarsChart(elements.weekdayChart, weekday, "weekday");
 }
 
-function renderSummary(summary) {
-  elements.summaryRecordCount.textContent = `${summary.record_count ?? 0}`;
-  elements.summaryMostEmotion.textContent = summary.most_common_emotion || "-";
-  elements.summaryAverageHq.textContent = summary.average_hq != null ? formatFixed(summary.average_hq) : "-";
-  elements.summaryCurrentHq.textContent = summary.current_hq != null ? formatFixed(summary.current_hq) : "-";
+function renderRecords() {
+  if (!state.records.length) {
+    elements.recordsList.innerHTML = `<div class="empty-state">아직 이 기간의 기록이 없습니다.</div>`;
+    return;
+  }
+
+  const latest = [...state.records].reverse().slice(0, 12);
+  elements.recordsList.innerHTML = latest
+    .map((record) => {
+      const note = record.note ? `<p class="record-note">${escapeHtml(record.note)}</p>` : "";
+      return `
+        <article class="record-item">
+          <div class="record-topline">
+            <strong class="record-emotion">${record.emotion}</strong>
+            <span class="record-timestamp">${formatDateTime(record.recordedAt)}</span>
+          </div>
+          <div class="record-meta">
+            <span>강도 ${record.intensity}</span>
+            <span>HQ ${formatFixed(record.hqPrevious)} -> ${formatFixed(record.hqCurrent)}</span>
+            <span>점수 ${formatSigned(record.emotionScore)}</span>
+          </div>
+          ${note}
+        </article>
+      `;
+    })
+    .join("");
 }
 
 function renderTimelineChart(records) {
-  if (!records || records.length === 0) {
-    elements.timelineChart.innerHTML = `<div class="empty-state">아직 표시할 기록이 없습니다.</div>`;
+  if (!records.length) {
+    elements.timelineChart.innerHTML = `<div class="empty-state">타임라인을 그릴 기록이 없습니다.</div>`;
     return;
   }
 
@@ -269,40 +419,36 @@ function renderTimelineChart(records) {
   const padding = 24;
   const points = records.map((record, index) => {
     const x = padding + (index / Math.max(records.length - 1, 1)) * (width - padding * 2);
-    const y = height - padding - ((Number(record.HQ_current) || 0) / 100) * (height - padding * 2);
+    const y = height - padding - (Number(record.hqCurrent) / 100) * (height - padding * 2);
     return { x, y };
   });
 
   const path = points.map((point, index) => `${index === 0 ? "M" : "L"}${point.x},${point.y}`).join(" ");
   const circles = points
-    .map(
-      (point) => `
-        <circle cx="${point.x}" cy="${point.y}" r="4.5" fill="#ef5b3f"></circle>
-      `
-    )
+    .map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4.5" fill="#ff6b35"></circle>`)
     .join("");
   const yGuides = [0, 25, 50, 75, 100]
     .map((value) => {
       const y = height - padding - (value / 100) * (height - padding * 2);
       return `
-        <line x1="${padding}" x2="${width - padding}" y1="${y}" y2="${y}" stroke="rgba(17,32,25,0.08)" />
-        <text x="${padding}" y="${y - 6}" fill="#5f6d65" font-size="11">${value}</text>
+        <line x1="${padding}" x2="${width - padding}" y1="${y}" y2="${y}" stroke="rgba(24,22,29,0.08)"></line>
+        <text x="${padding}" y="${y - 6}" fill="#6c6a74" font-size="11">${value}</text>
       `;
     })
     .join("");
 
   elements.timelineChart.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="시간 순 HQ 추이">
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="HQ 타임라인">
       ${yGuides}
-      <path d="${path}" fill="none" stroke="#112019" stroke-width="3" stroke-linecap="round"></path>
+      <path d="${path}" fill="none" stroke="#18161d" stroke-width="3" stroke-linecap="round"></path>
       ${circles}
     </svg>
   `;
 }
 
 function renderBarsChart(container, rows, labelKey) {
-  if (!rows || rows.length === 0) {
-    container.innerHTML = `<div class="empty-state">아직 표시할 데이터가 없습니다.</div>`;
+  if (!rows.length) {
+    container.innerHTML = `<div class="empty-state">표시할 평균 데이터가 없습니다.</div>`;
     return;
   }
 
@@ -310,13 +456,12 @@ function renderBarsChart(container, rows, labelKey) {
     <div class="bars-list">
       ${rows
         .map((row) => {
-          const value = Number(row.average_hq || 0);
-          const width = `${clamp(value, 0, 100)}%`;
+          const value = Number(row.averageHq || 0);
           return `
             <div class="bar-row">
               <span class="bar-label">${row[labelKey]}</span>
               <div class="bar-track">
-                <div class="bar-fill" style="width:${width}"></div>
+                <div class="bar-fill" style="width:${clamp(value, 0, 100)}%"></div>
               </div>
               <span class="bar-value">${formatFixed(value)}</span>
             </div>
@@ -327,64 +472,252 @@ function renderBarsChart(container, rows, labelKey) {
   `;
 }
 
-function renderRecords(records) {
-  if (!records || records.length === 0) {
-    elements.recordsList.innerHTML = `<div class="empty-state">기록을 추가하면 여기에 쌓입니다.</div>`;
-    return;
+function renderIdentity() {
+  const nickname = state.nickname || "익명 방문자";
+  elements.nicknameInput.value = state.nickname;
+  elements.nicknameBadge.textContent = nickname;
+  elements.projectIdLabel.textContent = state.projectId;
+  elements.userKeyLabel.textContent = state.user ? shortenUid(state.user.uid) : "-";
+  elements.heroCurrentHq.textContent = formatFixed(state.currentHq);
+  elements.lifetimeRecordCount.textContent = `${state.lifetimeRecordCount}`;
+}
+
+function syncInputsFromState() {
+  elements.intensityRange.value = String(state.intensity);
+  elements.intensityLabel.textContent = String(state.intensity);
+}
+
+function refreshPreview() {
+  const calculation = calculateHq(state.currentHq, state.selectedEmotion, state.intensity);
+  elements.previewCurrentHq.textContent = formatFixed(state.currentHq);
+  elements.previewEmotionScore.textContent = formatFixed(calculation.emotionScore);
+  elements.previewDeltaHq.textContent = formatSigned(calculation.deltaHq);
+  elements.previewNextHq.textContent = formatFixed(calculation.hqCurrent);
+  elements.summaryCurrentHq.textContent = formatFixed(state.currentHq);
+}
+
+function calculateHq(previousHq, emotion, intensity) {
+  const emotionScore = getEmotionScore(emotion);
+  const normalizedPrevious = clamp(Number(previousHq) || DEFAULT_HQ, 0, 100);
+  const intensityValue = clamp(Number(intensity) || 1, 1, 10);
+  const deltaHq = emotionScore * (intensityValue / 15);
+  const adjustmentFactor = 1 - Math.abs(normalizedPrevious - 50) / 100;
+  const adjustedDelta = deltaHq * adjustmentFactor;
+  const currentHq = clamp(normalizedPrevious + adjustedDelta, 0, 100);
+
+  return {
+    emotion,
+    emotionScore: round2(emotionScore),
+    intensity: intensityValue,
+    hqPrevious: round2(normalizedPrevious),
+    hqCurrent: round2(currentHq),
+    deltaHq: round2(adjustedDelta),
+    adjustmentFactor: round4(adjustmentFactor),
+  };
+}
+
+function buildSummary(records, currentHq) {
+  if (!records.length) {
+    return {
+      recordCount: 0,
+      mostCommonEmotion: null,
+      averageHq: null,
+      currentHq,
+    };
   }
 
-  const formatted = [...records].reverse().slice(0, 12);
-  elements.recordsList.innerHTML = formatted
-    .map((record) => {
-      const timestamp = new Date(record.timestamp);
-      const note = record.note ? `<p class="record-note">${escapeHtml(record.note)}</p>` : "";
-      return `
-        <article class="record-item">
-          <div class="record-topline">
-            <strong class="record-emotion">${record.emotion}</strong>
-            <span class="record-timestamp">${timestamp.toLocaleString("ko-KR")}</span>
-          </div>
-          <div class="record-meta">
-            <span>강도 ${record.intensity}</span>
-            <span>HQ ${formatFixed(record.HQ_previous)} → ${formatFixed(record.HQ_current)}</span>
-            <span>점수 ${formatFixed(record.emotion_score)}</span>
-          </div>
-          ${note}
-        </article>
-      `;
-    })
-    .join("");
+  const averageHq =
+    records.reduce((total, record) => total + Number(record.hqCurrent || 0), 0) / records.length;
+
+  return {
+    recordCount: records.length,
+    mostCommonEmotion: calculateMostCommonEmotion(records),
+    averageHq: round2(averageHq),
+    currentHq,
+  };
 }
 
-async function apiRequest(path, options = {}) {
-  const response = await fetch(`${normalizeApiBaseUrl(state.apiBaseUrl)}${path}`, options);
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `${response.status} ${response.statusText}`);
+function calculateMostCommonEmotion(records) {
+  const counts = new Map();
+  records.forEach((record) => {
+    counts.set(record.emotion, (counts.get(record.emotion) || 0) + 1);
+  });
+
+  let winner = null;
+  let maxCount = -1;
+  counts.forEach((count, emotion) => {
+    if (count > maxCount) {
+      winner = emotion;
+      maxCount = count;
+    }
+  });
+  return winner;
+}
+
+function calculateHourlyHqChange(records) {
+  const grouped = new Map();
+  records.forEach((record) => {
+    const date = record.recordedAt;
+    const hour = date.getHours();
+    const hourLabel = `${String(hour).padStart(2, "0")}:00`;
+    const current = grouped.get(hour) || { hour, hourLabel, total: 0, count: 0 };
+    current.total += Number(record.hqCurrent || 0);
+    current.count += 1;
+    grouped.set(hour, current);
+  });
+
+  return [...grouped.values()]
+    .sort((a, b) => a.hour - b.hour)
+    .map((row) => ({
+      hour: row.hour,
+      hourLabel: row.hourLabel,
+      averageHq: round2(row.total / row.count),
+      recordCount: row.count,
+    }));
+}
+
+function calculateWeekdayHqChange(records) {
+  const grouped = new Map();
+  records.forEach((record) => {
+    const weekdayIndex = (record.recordedAt.getDay() + 6) % 7;
+    const weekday = WEEKDAY_LABELS[weekdayIndex];
+    const current = grouped.get(weekdayIndex) || { weekdayIndex, weekday, total: 0, count: 0 };
+    current.total += Number(record.hqCurrent || 0);
+    current.count += 1;
+    grouped.set(weekdayIndex, current);
+  });
+
+  return [...grouped.values()]
+    .sort((a, b) => a.weekdayIndex - b.weekdayIndex)
+    .map((row) => ({
+      weekdayIndex: row.weekdayIndex,
+      weekday: row.weekday,
+      averageHq: round2(row.total / row.count),
+      recordCount: row.count,
+    }));
+}
+
+function normalizeRecord(id, data) {
+  return {
+    id,
+    emotion: data.emotion,
+    emotionScore: Number(data.emotionScore || 0),
+    intensity: Number(data.intensity || 0),
+    note: data.note || "",
+    hqPrevious: Number(data.hqPrevious ?? DEFAULT_HQ),
+    hqCurrent: Number(data.hqCurrent ?? DEFAULT_HQ),
+    deltaHq: Number(data.deltaHq ?? 0),
+    adjustmentFactor: Number(data.adjustmentFactor ?? 1),
+    recordedAt: toDate(data.recordedAt) || new Date(),
+  };
+}
+
+function getClientConfig() {
+  const config = window.EMOTION_TRACKER_CONFIG || {};
+  const firebase = config.firebase || {};
+  const requiredKeys = ["apiKey", "authDomain", "projectId", "appId"];
+  const missingKeys = requiredKeys.filter((key) => !String(firebase[key] || "").trim());
+
+  return {
+    firebase,
+    collectionName: config.app?.collectionName || "emotion_records",
+    isValid: missingKeys.length === 0,
+    missingKeys,
+  };
+}
+
+function getUserDocRef() {
+  return doc(state.db, "users", state.user.uid);
+}
+
+function getEmotionScore(emotion) {
+  const option = EMOTION_OPTIONS.find((item) => item.key === emotion);
+  return option ? option.score : 0;
+}
+
+function getPeriodStart(period) {
+  const now = new Date();
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+
+  if (period === "today") {
+    return start;
   }
-
-  return response.json();
+  if (period === "week") {
+    const weekday = (start.getDay() + 6) % 7;
+    start.setDate(start.getDate() - weekday);
+    return start;
+  }
+  if (period === "month") {
+    start.setDate(1);
+    return start;
+  }
+  return null;
 }
 
-function normalizeApiBaseUrl(value) {
-  return (value || window.location.origin).replace(/\/$/, "");
+function setConnectionState(message, level) {
+  elements.connectionLabel.textContent = message;
+  elements.statusDot.className = `status-dot ${level}`;
 }
 
-function buildGuestId() {
-  return `guest-${Math.random().toString(36).slice(2, 8)}`;
+function disposeSubscription(key) {
+  if (typeof state[key] === "function") {
+    state[key]();
+    state[key] = null;
+  }
 }
 
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
+function toDate(value) {
+  if (!value) {
+    return null;
+  }
+  if (value instanceof Date) {
+    return value;
+  }
+  if (typeof value.toDate === "function") {
+    return value.toDate();
+  }
+  return new Date(value);
+}
+
+function shortenUid(uid) {
+  return uid.length <= 10 ? uid : `${uid.slice(0, 6)}...${uid.slice(-4)}`;
+}
+
+function formatDateTime(value) {
+  return new Intl.DateTimeFormat("ko-KR", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(value);
 }
 
 function formatFixed(value) {
   return Number(value).toFixed(2);
 }
 
-function formatNumber(value) {
+function formatSigned(value) {
   const number = Number(value);
-  return `${number >= 0 ? "+" : ""}${number.toFixed(1)}`;
+  return `${number >= 0 ? "+" : ""}${number.toFixed(2)}`;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function round2(value) {
+  return Math.round(Number(value) * 100) / 100;
+}
+
+function round4(value) {
+  return Math.round(Number(value) * 10000) / 10000;
+}
+
+function readableError(error) {
+  const message = typeof error?.message === "string" ? error.message : String(error);
+  return message.replace(/^Firebase:\s*/, "");
 }
 
 function escapeHtml(text) {
@@ -399,7 +732,7 @@ function escapeHtml(text) {
 let toastTimer = null;
 function showToast(message, isError = false) {
   elements.toast.textContent = message;
-  elements.toast.style.background = isError ? "#7f1d1d" : "#112019";
+  elements.toast.style.background = isError ? "#7f1d1d" : "#18161d";
   elements.toast.classList.add("visible");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {

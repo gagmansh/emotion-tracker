@@ -1,0 +1,73 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function validSummary() {
+      return request.resource.data.keys().hasOnly([
+        'currentHq',
+        'recordCount',
+        'lastEmotion',
+        'lastRecordedAt',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      request.resource.data.currentHq is number &&
+      request.resource.data.currentHq >= 0 &&
+      request.resource.data.currentHq <= 100 &&
+      request.resource.data.recordCount is int &&
+      request.resource.data.recordCount >= 0 &&
+      (!('lastEmotion' in request.resource.data) || request.resource.data.lastEmotion is string);
+    }
+
+    function validEmotionRecord() {
+      return request.resource.data.keys().hasOnly([
+        'emotion',
+        'emotionScore',
+        'intensity',
+        'note',
+        'hqPrevious',
+        'hqCurrent',
+        'deltaHq',
+        'adjustmentFactor',
+        'recordedAt',
+        'createdAt'
+      ]) &&
+      request.resource.data.emotion is string &&
+      request.resource.data.emotionScore is number &&
+      request.resource.data.intensity is int &&
+      request.resource.data.intensity >= 1 &&
+      request.resource.data.intensity <= 10 &&
+      request.resource.data.hqPrevious is number &&
+      request.resource.data.hqPrevious >= 0 &&
+      request.resource.data.hqPrevious <= 100 &&
+      request.resource.data.hqCurrent is number &&
+      request.resource.data.hqCurrent >= 0 &&
+      request.resource.data.hqCurrent <= 100 &&
+      request.resource.data.deltaHq is number &&
+      request.resource.data.adjustmentFactor is number &&
+      request.resource.data.note is string &&
+      request.resource.data.note.size() <= 300 &&
+      request.resource.data.recordedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && validSummary();
+      allow delete: if false;
+
+      match /emotion_records/{recordId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && validEmotionRecord();
+        allow update, delete: if false;
+      }
+    }
+  }
+}
