@@ -749,7 +749,10 @@ function normalizeRecord(id, data) {
 
 function getClientConfig() {
   const config = window.EMOTION_TRACKER_CONFIG || {};
-  const firebase = config.firebase || {};
+  const firebase = { ...(config.firebase || {}) };
+  if (shouldUseSameOriginAuthDomain()) {
+    firebase.authDomain = window.location.host;
+  }
   const requiredKeys = ["apiKey", "authDomain", "projectId", "appId"];
   const missingKeys = requiredKeys.filter((key) => !String(firebase[key] || "").trim());
 
@@ -791,6 +794,10 @@ function getPeriodStart(period) {
     return start;
   }
   return null;
+}
+
+function shouldUseSameOriginAuthDomain() {
+  return !/^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname);
 }
 
 function isEmbeddedBrowser() {
