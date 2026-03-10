@@ -1,5 +1,15 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
-import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
+import {
+  GoogleAuthProvider,
+  browserLocalPersistence,
+  getAuth,
+  linkWithPopup,
+  onAuthStateChanged,
+  setPersistence,
+  signInAnonymously,
+  signInWithPopup,
+  signOut,
+} from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
 import {
   Timestamp,
   collection,
@@ -54,6 +64,8 @@ const state = {
 };
 
 const elements = {};
+const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: "select_account" });
 
 document.addEventListener("DOMContentLoaded", async () => {
   cacheElements();
@@ -71,8 +83,12 @@ function cacheElements() {
   elements.setupBanner = document.querySelector("#setup-banner");
   elements.nicknameInput = document.querySelector("#nickname-input");
   elements.nicknameBadge = document.querySelector("#nickname-badge");
+  elements.authHelpText = document.querySelector("#auth-help-text");
   elements.saveNicknameButton = document.querySelector("#save-nickname-button");
   elements.refreshButton = document.querySelector("#refresh-button");
+  elements.googleLoginButton = document.querySelector("#google-login-button");
+  elements.anonymousLoginButton = document.querySelector("#anonymous-login-button");
+  elements.signOutButton = document.querySelector("#sign-out-button");
   elements.emotionPicker = document.querySelector("#emotion-picker");
   elements.intensityRange = document.querySelector("#intensity-range");
   elements.intensityLabel = document.querySelector("#intensity-label");
@@ -128,6 +144,69 @@ function wireEvents() {
     showToast("동기화 새로고침");
   });
 
+  elements.googleLoginButton.addEventListener("click", async () => {
+    if (!state.auth) {
+      showToast("Firebase 초기화가 끝난 뒤 다시 시도해주세요", true);
+      return;
+    }
+
+    elements.googleLoginButton.disabled = true;
+
+    try {
+      if (state.user?.isAnonymous) {
+        try {
+          await linkWithPopup(state.user, googleProvider);
+          showToast("Google 계정으로 연결했습니다");
+          return;
+        } catch (error) {
+          if (error?.code !== "auth/credential-already-in-use") {
+            throw error;
+          }
+        }
+      }
+
+      await signInWithPopup(state.auth, googleProvider);
+      showToast("Google 로그인 완료");
+    } catch (error) {
+      showToast(readableError(error), true);
+    } finally {
+      elements.googleLoginButton.disabled = false;
+    }
+  });
+
+  elements.anonymousLoginButton.addEventListener("click", async () => {
+    if (!state.auth) {
+      showToast("Firebase 초기화가 끝난 뒤 다시 시도해주세요", true);
+      return;
+    }
+
+    elements.anonymousLoginButton.disabled = true;
+    try {
+      await signInAnonymously(state.auth);
+      showToast("익명으로 시작했습니다");
+    } catch (error) {
+      showToast(readableError(error), true);
+    } finally {
+      elements.anonymousLoginButton.disabled = false;
+    }
+  });
+
+  elements.signOutButton.addEventListener("click", async () => {
+    if (!state.auth || !state.user) {
+      return;
+    }
+
+    elements.signOutButton.disabled = true;
+    try {
+      await signOut(state.auth);
+      showToast("로그아웃했습니다");
+    } catch (error) {
+      showToast(readableError(error), true);
+    } finally {
+      elements.signOutButton.disabled = false;
+    }
+  });
+
   elements.intensityRange.addEventListener("input", (event) => {
     state.intensity = Number(event.target.value);
     elements.intensityLabel.textContent = String(state.intensity);
@@ -175,24 +254,31 @@ async function bootstrapFirebase() {
     state.app = initializeApp(clientConfig.firebase);
     state.db = getFirestore(state.app);
     state.auth = getAuth(state.app);
+    await setPersistence(state.auth, browserLocalPersistence);
     state.isConfigured = true;
     elements.setupBanner.hidden = true;
     setConnectionState("연결 준비됨", "warn");
 
     onAuthStateChanged(state.auth, async (user) => {
       if (!user) {
-        try {
-          await signInAnonymously(state.auth);
-        } catch (error) {
-          setConnectionState("로그인 실패", "error");
-          elements.authStatusLabel.textContent = "인증 실패";
-          showToast(readableError(error), true);
-        }
+        state.user = null;
+        state.currentHq = DEFAULT_HQ;
+        state.lifetimeRecordCount = 0;
+        state.records = [];
+        disposeSubscription("unsubscribeSummary");
+        disposeSubscription("unsubscribeRecords");
+        elements.authStatusLabel.textContent = "로그인 전";
+        elements.saveRecordButton.disabled = true;
+        setConnectionState("로그인 필요", "warn");
+        renderIdentity();
+        renderAnalytics();
+        renderRecords();
+        refreshPreview();
         return;
       }
 
       state.user = user;
-      elements.authStatusLabel.textContent = user.isAnonymous ? "익명 사용자" : "로그인됨";
+      elements.authStatusLabel.textContent = user.isAnonymous ? "익명 사용자" : "Google 로그인";
       renderIdentity();
 
       await ensureUserSummaryDoc();
@@ -473,13 +559,25 @@ function renderBarsChart(container, rows, labelKey) {
 }
 
 function renderIdentity() {
-  const nickname = state.nickname || "고요한 숲";
+  const fallbackName = state.user?.displayName?.trim() || (state.user?.isAnonymous ? "익명 방문자" : "마음 사용자");
+  const nickname = state.nickname || fallbackName;
   elements.nicknameInput.value = state.nickname;
   elements.nicknameBadge.textContent = nickname;
   elements.projectIdLabel.textContent = state.projectId === "-" ? "프로젝트 -" : `프로젝트 ${state.projectId}`;
   elements.userKeyLabel.textContent = state.user ? `UID ${shortenUid(state.user.uid)}` : "UID -";
   elements.heroCurrentHq.textContent = formatFixed(state.currentHq);
   elements.lifetimeRecordCount.textContent = `${state.lifetimeRecordCount}`;
+  elements.googleLoginButton.hidden = Boolean(state.user && !state.user.isAnonymous);
+  elements.anonymousLoginButton.hidden = Boolean(state.user);
+  elements.signOutButton.hidden = !state.user;
+
+  if (!state.user) {
+    elements.authHelpText.textContent = "Google로 로그인하면 어떤 기기에서 접속해도 같은 기록을 이어서 볼 수 있습니다.";
+  } else if (state.user.isAnonymous) {
+    elements.authHelpText.textContent = "익명 기록은 이 브라우저 안에서만 이어집니다. 기기 간 동기화가 필요하면 Google 로그인을 사용하세요.";
+  } else {
+    elements.authHelpText.textContent = "지금은 Google 계정 기준으로 기록이 묶여 있습니다. 다른 기기에서도 같은 계정으로 이어집니다.";
+  }
 }
 
 function syncInputsFromState() {

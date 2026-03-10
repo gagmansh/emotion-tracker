@@ -213,6 +213,54 @@ button {
   color: rgba(31, 35, 33, 0.42);
 }
 
+.identity-hint {
+  margin: 14px 0 0;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: rgba(31, 35, 33, 0.58);
+}
+
+.auth-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.auth-primary,
+.auth-secondary,
+.auth-tertiary {
+  width: 100%;
+  padding: 13px 14px;
+  border-radius: 18px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.auth-primary {
+  background: #1a1a1a;
+  color: white;
+}
+
+.auth-secondary {
+  background: rgba(255, 255, 255, 0.72);
+  color: rgba(31, 35, 33, 0.72);
+}
+
+.auth-tertiary {
+  background: transparent;
+  color: rgba(31, 35, 33, 0.54);
+  border: 1px solid rgba(31, 35, 33, 0.08);
+}
+
+.auth-primary[hidden],
+.auth-secondary[hidden],
+.auth-tertiary[hidden] {
+  display: none;
+}
+
 .identity-stats {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
